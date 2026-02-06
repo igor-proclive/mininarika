@@ -1,36 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mininarika
 
-## Getting Started
+Recipe mini app built with Next.js 16, TypeScript, SQLite, and Tailwind CSS.
 
-First, run the development server:
+## Screenshots
+
+| Recipe list | Recipe detail |
+|:-----------:|:-------------:|
+| ![Recipe list](/docs/screenshots/list.png) | ![Recipe detail](/docs/screenshots/detail.png) |
+
+## Quick Start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run db:setup   # generates placeholder images + seeds the database
+npm run dev        # starts on http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Architecture
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+/app
+  /recepti              SSR recipe list
+  /recepti/[slug]       SSG recipe detail (with generateMetadata)
+  /api/recipes          REST API (GET, POST)
+  /api/recipes/[slug]   REST API (GET, PUT, DELETE)
+  /cdn/[...path]        Fake CDN route
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+/lib
+  /db.ts                SQLite connection (better-sqlite3)
+  /cdn.ts               CDN URL construction
+  /recipes
+    recipe.model.ts     Domain types
+    recipe.service.ts   Business logic
+    recipe.validation.ts  Zod schemas
+    recipe.mapper.ts    DB row → domain mapping
 
-## Learn More
+/components
+  RecipeCard.tsx
+  RecipeList.tsx
 
-To learn more about Next.js, take a look at the following resources:
+/scripts
+  seed.ts               Database seeder
+  generate-images.ts    Placeholder image generator
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Separation of Concerns
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Each layer has a single responsibility:
 
-## Deploy on Vercel
+- **Route handlers** parse requests, delegate to services, return responses
+- **Services** contain all business logic (slug generation, CRUD operations)
+- **Validation** is handled by Zod schemas, separate from business logic
+- **Mapper** converts database rows to domain objects
+- **Components** receive typed data and render UI
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Rendering Strategy
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Recipe list** (`/recepti`) — server-rendered on every request (`force-dynamic`), always fresh data
+- **Recipe detail** (`/recepti/[slug]`) — statically generated at build time via `generateStaticParams`, with full SEO metadata via `generateMetadata`
+- **Home page** — static, no data dependencies
+
+Pages are React Server Components. Client components are used only for the language toggle and translated UI labels.
+
+### SEO
+
+Recipe detail pages generate metadata server-side including title, description, and OpenGraph image. The list page has static metadata. The root layout uses a template pattern for consistent title formatting.
+
+## API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/recipes` | List all recipes |
+| GET | `/api/recipes/:slug` | Get recipe by slug |
+| POST | `/api/recipes` | Create recipe |
+| PUT | `/api/recipes/:slug` | Update recipe |
+| DELETE | `/api/recipes/:slug` | Delete recipe |
+
+Validation errors return `400` with Zod issue details. Missing recipes return `404`. Duplicate slugs return `409`.
+
+## CDN Simulation
+
+Images are never stored as full URLs in the database. The database stores only a relative path like `/recipes/crni-rizot/hero.webp`.
+
+The frontend constructs the full URL using `CDN_BASE_URL` from environment:
+
+```
+${CDN_BASE_URL}/recipes/crni-rizot/hero.webp
+```
+
+The `/cdn/[...path]` route serves files from `/cdn-assets/` with production-style cache headers:
+
+```
+Cache-Control: public, max-age=31536000, immutable
+```
+
+In production, `CDN_BASE_URL` would point to a real CDN (CloudFront, Cloudflare, etc.) and this route would not be needed.
+
+## Database
+
+SQLite via better-sqlite3. The schema auto-creates on first connection. JSON columns store tags, ingredients, and steps arrays.
+
+Seed data includes 5 Croatian recipes with realistic content.
+
+## Production Scaling
+
+- Replace SQLite with PostgreSQL
+- Point `CDN_BASE_URL` to a real CDN, upload images to object storage
+- Add ISR (Incremental Static Regeneration) with `revalidate` to recipe detail pages
+- Add pagination and filtering to the list API
+- Add authentication for write operations
+- Add rate limiting to API routes
